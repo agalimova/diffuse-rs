@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Portable baseline, matching the release binaries. The repo's
+  # .cargo/config.toml sets target-cpu=native for local builds, which breaks
+  # gemm's f16 asm on virtualized Apple runners (fullfp16 not reported).
+  RUSTFLAGS: ""
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        # macos-latest is Apple Silicon: it exercises the NEON kernels and
+        # their parity tests on the arch users actually run.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --features server
+
+  # The SIMD dispatch must keep compiling on non-x86 (DGX Spark is aarch64).
+  check-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --target aarch64-unknown-linux-gnu --features server
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --features server

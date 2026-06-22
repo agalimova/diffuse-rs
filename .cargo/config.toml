@@ -1,0 +1,10 @@
+# Tune for the host CPU on native builds. The per-arch split keeps a
+# cross-compile (which sets --target) from inheriting the wrong host's
+# feature flags. On aarch64 this unlocks NEON/SVE2/i8mm/bf16 codegen and
+# lets LLVM autovectorize the scalar element-wise kernels for the target
+# core (e.g. the GB10's Cortex-X925), rather than generic-aarch64 baseline.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native"]
+
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["-C", "target-cpu=native"]

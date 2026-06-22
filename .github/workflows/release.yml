@@ -1,0 +1,57 @@
+name: release
+
+# Build prebuilt binaries on a version tag and attach them to the GitHub
+# Release, so users can run diffuse-rs without installing Rust.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # Portable release binaries. The repo's .cargo/config.toml pins
+  # target-cpu=native for local builds, which would SIGILL on any CPU older
+  # than the runner. AVX2 and NEON are still selected at runtime, so a
+  # baseline build keeps the fast paths without the portability hazard.
+  RUSTFLAGS: ""
+
+jobs:
+  # The upload action requires the GitHub Release to already exist.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          # Cross-compiled from the arm64 runner; the macos-13 Intel runners
+          # are retired and queue forever.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: diffuse-rs
+          target: ${{ matrix.target }}
+          features: server
+          tar: unix
+          zip: windows
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,10 @@
+/target
+*.gguf
+__pycache__/
+*.pyc
+/results/
+/variants/
+__pycache__/
+TODO.md
+benchmark_tokens.json
+target-base/
