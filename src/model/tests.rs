@@ -305,11 +305,21 @@ fn test_nucleus_prefix() {
     // probs ~ [0.72, 0.27, 0.007, ...]: top_p=0.9 keeps two entries
     let row = [2.0f32, 1.0, -2.0, -10.0];
     let sorted = top_k_logits(&row, 4);
-    let kept = nucleus_prefix(&sorted, log_sum_exp(&row), 0.9);
+    let kept = nucleus_prefix(&sorted, log_sum_exp(&row), 1.0, 0.9);
     assert_eq!(kept.len(), 2);
     // Always keeps at least one entry
-    let kept = nucleus_prefix(&sorted, log_sum_exp(&row), 0.0);
+    let kept = nucleus_prefix(&sorted, log_sum_exp(&row), 1.0, 0.0);
     assert_eq!(kept.len(), 1);
+}
+
+#[test]
+fn test_nucleus_prefix_tempered() {
+    // T=0.5 sharpens the distribution: p(top1) rises from ~0.72 to ~0.88,
+    // so top_p=0.85 keeps two entries at T=1 but only one at T=0.5.
+    let row = [2.0f32, 1.0, -2.0, -10.0];
+    let sorted = top_k_logits(&row, 4);
+    assert_eq!(nucleus_prefix(&sorted, log_sum_exp_scaled(&row, 1.0), 1.0, 0.85).len(), 2);
+    assert_eq!(nucleus_prefix(&sorted, log_sum_exp_scaled(&row, 2.0), 2.0, 0.85).len(), 1);
 }
 
 #[test]

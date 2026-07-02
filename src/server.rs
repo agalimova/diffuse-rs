@@ -454,8 +454,22 @@ fn validate_request(
     if !(0.0..=1.0).contains(&opts.top_p) || opts.top_p == 0.0 {
         return Err(bad_request("top_p must be in (0, 1]"));
     }
+    let float_fields = [
+        ("temperature", opts.temperature),
+        ("cfg_scale", opts.cfg_scale),
+        ("entropy_threshold", opts.entropy_threshold),
+        ("eb_entropy_bound", opts.eb_entropy_bound),
+        ("confidence_threshold", opts.confidence_threshold),
+        ("iter_smooth", opts.iter_smooth),
+    ];
+    if let Some((name, _)) = float_fields.iter().find(|(_, v)| !v.is_finite()) {
+        return Err(bad_request(format!("{name} must be a finite number")));
+    }
     if opts.temperature < 0.0 {
         return Err(bad_request("temperature must be >= 0"));
+    }
+    if opts.cfg_scale < 0.0 {
+        return Err(bad_request("cfg_scale must be >= 0"));
     }
     if opts.block_length == Some(0) {
         return Err(bad_request("block_length must be at least 1"));
@@ -524,7 +538,10 @@ fn sse_generation(
     tokio::task::spawn_blocking(move || {
         let _permit = permit; // queue slot held until generation finishes
         let model_name = state.meta.model_type.clone();
-        let result = {
+        // Catch panics so the stream always ends with an error frame and
+        // [DONE] instead of silently truncating (the JoinHandle is dropped,
+        // so nothing else would observe them).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut m = state.model.lock();
             model::generate_observed(&mut m, &prompt_ids, max_tokens, &params, &mut |snap| {
                 let payload = json!({
@@ -539,9 +556,19 @@ fn sse_generation(
                 });
                 let _ = tx.send(Event::default().data(payload.to_string()));
             })
-        };
+        }));
         let payload = match result {
-            Ok(out) => {
+            Err(panic) => {
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                json!({"error": {"message": format!("inference panicked: {msg}"),
+                                 "type": "server_error"}})
+            }
+            Ok(Err(e)) => json!({"error": {"message": e.to_string(), "type": "server_error"}}),
+            Ok(Ok(out)) => {
                 let text = decode_text(state.tokenizer.as_ref(), &out.tokens);
                 let choice = if chat {
                     json!({"index": 0, "delta": {"role": "assistant", "content": text},
@@ -555,7 +582,6 @@ fn sse_generation(
                                   "completion_tokens": out.tokens.len(),
                                   "total_tokens": n_prompt + out.tokens.len()}})
             }
-            Err(e) => json!({"error": {"message": e.to_string(), "type": "server_error"}}),
         };
         let _ = tx.send(Event::default().data(payload.to_string()));
         let _ = tx.send(Event::default().data("[DONE]"));
@@ -704,7 +730,8 @@ pub fn build_router(model: Model, tokenizer: Option<AnyTokenizer>) -> Router {
         model: Mutex::new(model),
         tokenizer,
         meta,
-        queue: Arc::new(tokio::sync::Semaphore::new(MAX_QUEUED_REQUESTS)),
+        // One permit for the actively running request plus MAX_QUEUED waiters.
+        queue: Arc::new(tokio::sync::Semaphore::new(MAX_QUEUED_REQUESTS + 1)),
     });
 
     Router::new()

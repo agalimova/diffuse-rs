@@ -24,6 +24,12 @@ pub(crate) fn log_sum_exp(row: &[f32]) -> f32 {
     max + row.iter().map(|&l| (l - max).exp()).sum::<f32>().ln()
 }
 
+/// log(sum(exp(l * inv_t))) over the row. `inv_t` must be positive.
+pub(crate) fn log_sum_exp_scaled(row: &[f32], inv_t: f32) -> f32 {
+    let max = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max) * inv_t;
+    max + row.iter().map(|&l| (l * inv_t - max).exp()).sum::<f32>().ln()
+}
+
 /// Indices and logits of the k largest entries, sorted descending, written
 /// into `out` (reused: the full-vocab staging is ~1 MB per call otherwise).
 pub(crate) fn top_k_logits_into(row: &[f32], k: usize, out: &mut Vec<(u32, f32)>) {
@@ -46,12 +52,18 @@ pub(crate) fn top_k_logits(row: &[f32], k: usize) -> Vec<(u32, f32)> {
     entries
 }
 
-/// Shortest descending-sorted prefix with cumulative probability >= top_p.
-/// Probabilities are relative to the full distribution (lse over all logits).
-pub(crate) fn nucleus_prefix(sorted: &[(u32, f32)], lse: f32, top_p: f32) -> &[(u32, f32)] {
+/// Shortest descending-sorted prefix with cumulative probability >= top_p
+/// under the tempered distribution softmax(logits * inv_t). `lse` must be
+/// `log_sum_exp_scaled` of the full row at the same `inv_t`.
+pub(crate) fn nucleus_prefix(
+    sorted: &[(u32, f32)],
+    lse: f32,
+    inv_t: f32,
+    top_p: f32,
+) -> &[(u32, f32)] {
     let mut cum = 0.0f32;
     for (i, &(_, logit)) in sorted.iter().enumerate() {
-        cum += (logit - lse).exp();
+        cum += (logit * inv_t - lse).exp();
         if cum >= top_p {
             return &sorted[..=i];
         }
@@ -769,7 +781,10 @@ impl<'a> Denoiser<'a> {
         let mut sorted = std::mem::take(&mut self.topk);
         top_k_logits_into(row, k, &mut sorted);
         let kept = if p.top_p < 1.0 {
-            nucleus_prefix(&sorted, log_sum_exp(row), p.top_p)
+            // The nucleus must be selected from the same tempered distribution
+            // the Gumbel-max below samples from, not the raw T=1 distribution.
+            let inv_t = 1.0 / p.temperature;
+            nucleus_prefix(&sorted, log_sum_exp_scaled(row, inv_t), inv_t, p.top_p)
         } else {
             &sorted[..]
         };

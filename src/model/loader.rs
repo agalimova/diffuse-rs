@@ -153,13 +153,13 @@ impl<'a> Meta<'a> {
             .or_else(|| self.gguf.metadata.get(&format!("{}.{key}", self.arch)))
     }
     fn u32(&self, key: &str) -> Option<u32> {
-        self.find(key).and_then(|v| v.to_u32().ok())
+        self.find(key).and_then(value_to_usize).and_then(|v| u32::try_from(v).ok())
     }
     fn req_u32(&self, key: &str) -> Result<u32> {
         self.u32(key).with_context(|| format!("missing: {key}"))
     }
     fn usize(&self, key: &str) -> Option<usize> {
-        self.u32(key).map(|v| v as usize)
+        self.find(key).and_then(value_to_usize)
     }
     fn f32(&self, key: &str, default: f32) -> f32 {
         self.find(key).and_then(|v| v.to_f32().ok()).unwrap_or(default)
@@ -168,7 +168,11 @@ impl<'a> Meta<'a> {
         self.find(key).and_then(|v| v.to_bool().ok()).unwrap_or(default)
     }
     fn raw_u32(&self, key: &str) -> Option<u32> {
-        self.gguf.metadata.get(key).and_then(|v| v.to_u32().ok())
+        self.gguf
+            .metadata
+            .get(key)
+            .and_then(value_to_usize)
+            .and_then(|v| u32::try_from(v).ok())
     }
     fn raw_bool(&self, key: &str) -> Option<bool> {
         self.gguf.metadata.get(key).and_then(|v| v.to_bool().ok())

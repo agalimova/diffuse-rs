@@ -171,9 +171,13 @@ fn byte_maps() -> (Vec<char>, HashMap<char, u8>) {
 fn pre_regex(pre: &str) -> fancy_regex::Regex {
     let llama3 = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
     let qwen2 = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+    let bailing = r"'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+";
     let pattern = match pre {
         "qwen2" | "dream" => qwen2,
         "llama-bpe" | "llama3" | "llada" => llama3,
+        // Ling/Bailing family (LLaDA-MoE, LLaDA2); mirrors llama.cpp's
+        // LLAMA_VOCAB_PRE_TYPE_BAILINGMOE.
+        "bailingmoe" | "bailingmoe2" | "llada-moe" => bailing,
         other => {
             eprintln!("[diffuse-rs] unknown tokenizer.ggml.pre {other:?}, using llama-bpe rules");
             llama3
@@ -522,6 +526,16 @@ mod tests {
         assert_eq!(ids, vec![2, 4, 6]);
         assert_eq!(tok.decode(&ids, false), "ab c<|end|>");
         assert_eq!(tok.decode(&ids, true), "ab c");
+    }
+
+    #[test]
+    fn test_pre_regex_bailing() {
+        let re = pre_regex("bailingmoe2");
+        let pieces: Vec<&str> =
+            re.find_iter("Hello's 123 world!").map(|m| m.unwrap().as_str()).collect();
+        // Digits split individually; contraction and punctuation as their
+        // own pieces, matching llama.cpp's bailingmoe rules.
+        assert_eq!(pieces, vec!["Hello", "'s", " ", "1", "2", "3", " world", "!"]);
     }
 
     #[test]

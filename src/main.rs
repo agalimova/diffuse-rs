@@ -322,6 +322,29 @@ fn run_bench(args: &BenchArgs) -> Result<()> {
 // Generate
 // =============================================================================
 
+/// Render one denoising snapshot: ░ for masked positions, committed tokens
+/// decoded as contiguous runs so UTF-8 sequences spanning tokens survive.
+fn render_canvas(tokens: &[i32], mask_id: i32, tok: &gguf_tokenizer::GgufTokenizer) -> String {
+    let mut canvas = String::new();
+    let mut run: Vec<u32> = Vec::new();
+    let mut flush = |canvas: &mut String, run: &mut Vec<u32>| {
+        if !run.is_empty() {
+            canvas.push_str(&tok.decode(run, true));
+            run.clear();
+        }
+    };
+    for &t in tokens {
+        if t == mask_id {
+            flush(&mut canvas, &mut run);
+            canvas.push('\u{2591}');
+        } else {
+            run.push(t.max(0) as u32);
+        }
+    }
+    flush(&mut canvas, &mut run);
+    canvas
+}
+
 fn run_generate(args: &GenerateArgs) -> Result<()> {
     init_threads(args.threads)?;
     // Validate sampler flags before the multi-second model load.
@@ -353,17 +376,7 @@ fn run_generate(args: &GenerateArgs) -> Result<()> {
         params.progress = false; // the step lines would interleave with the canvas
         let mask_id = model.mask_token_id as i32;
         model::generate_observed(&mut model, &prompt, args.n_generate, &params, &mut |snap| {
-            let canvas: String = snap
-                .tokens
-                .iter()
-                .map(|&t| {
-                    if t == mask_id {
-                        "\u{2591}".to_string() // ░ for still-masked positions
-                    } else {
-                        tok.decode(&[t.max(0) as u32], true)
-                    }
-                })
-                .collect();
+            let canvas = render_canvas(snap.tokens, mask_id, tok);
             print!(
                 "\x1b[2J\x1b[H-- step {}/{} | {} masked --\n{canvas}\n",
                 snap.step + 1,
